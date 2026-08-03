@@ -43,15 +43,51 @@ jobs:
       - name: Verify package sources
         run: |
           set -euo pipefail
-          test -f "${PACKAGE_DIR}/PKGBUILD"
-          test -f "${PACKAGE_DIR}/nano-9.2-ucrt64.patch"
-          command -v makepkg-mingw
+          required_files=(
+            "${PACKAGE_DIR}/PKGBUILD"
+            "${PACKAGE_DIR}/nano-9.2-ucrt64.patch"
+          )
 
-          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]] && \
-              grep -Eq "^[[:space:]]*'SKIP'[[:space:]]*(#.*)?$" \
-                "${PACKAGE_DIR}/PKGBUILD"; then
-            echo "Replace the patch SKIP checksum before publishing a release." >&2
+          for path in "${required_files[@]}"; do
+            if [[ ! -f "${path}" ]]; then
+              echo "::error file=${path}::Required package source is missing"
+              echo "Repository files:"
+              find . -maxdepth 3 -type f -print | sort
+              exit 1
+            fi
+          done
+
+          if ! command -v makepkg-mingw >/dev/null; then
+            echo "::error::makepkg-mingw is not available"
+            pacman -Q pacman base-devel || true
+            pacman -Ql pacman | grep -F makepkg-mingw || true
             exit 1
+          fi
+
+          makepkg-mingw --version || true
+
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            source "${PACKAGE_DIR}/PKGBUILD"
+            patch_index=-1
+
+            for i in "${!source[@]}"; do
+              source_name="${source[$i]##*::}"
+              source_name="${source_name##*/}"
+              if [[ "${source_name}" == "nano-9.2-ucrt64.patch" ]]; then
+                patch_index="${i}"
+                break
+              fi
+            done
+
+            if (( patch_index < 0 )); then
+              echo "::error::Patch is not declared in PKGBUILD source[]"
+              exit 1
+            fi
+
+            if [[ "${sha256sums[$patch_index]:-}" == "SKIP" ]]; then
+              echo "::error::Patch checksum must not be SKIP for a release"
+              exit 1
+            fi
           fi
 
       - name: Build pacman package
@@ -67,10 +103,20 @@ jobs:
             --noconfirm \
             --force
 
-          package="$(find . -maxdepth 1 -type f \
-            -name 'mingw-w64-ucrt-x86_64-nano-*.pkg.tar.zst' \
-            -print -quit)"
-          test -n "${package}"
+          mapfile -t packages < <(
+            find . -maxdepth 1 -type f \
+              -name 'mingw-w64-ucrt-x86_64-nano-[0-9]*.pkg.tar.zst' \
+              ! -name '*-debug-*' \
+              -print
+          )
+
+          if (( ${#packages[@]} != 1 )); then
+            echo "::error::Expected exactly one main nano package"
+            printf 'Candidate: %s\n' "${packages[@]}"
+            exit 1
+          fi
+
+          package="${packages[0]}"
 
           # Read the package release identity from PKGBUILD.  pkgrel is the
           # pacman-native rebuild counter and replaces the unrelated 0.0.N tag.

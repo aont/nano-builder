@@ -1,0 +1,60 @@
+_realname=nano
+
+pkgbase=mingw-w64-${_realname}
+pkgname="${MINGW_PACKAGE_PREFIX}-${_realname}"
+pkgver=9.2
+pkgrel=1
+pkgdesc="Pico editor clone with enhancements (mingw-w64)"
+arch=('any')
+mingw_arch=('ucrt64')
+url="https://www.nano-editor.org/"
+license=('GPL-3.0-or-later')
+depends=(
+  "${MINGW_PACKAGE_PREFIX}-file"
+  "${MINGW_PACKAGE_PREFIX}-gettext-runtime"
+  "${MINGW_PACKAGE_PREFIX}-ncurses"
+)
+makedepends=(
+  'autotools'
+  "${MINGW_PACKAGE_PREFIX}-gcc"
+  "${MINGW_PACKAGE_PREFIX}-gettext-tools"
+  "${MINGW_PACKAGE_PREFIX}-libiconv"
+  "${MINGW_PACKAGE_PREFIX}-pkgconf"
+)
+source=(
+  "https://www.nano-editor.org/dist/v9/${_realname}-${pkgver}.tar.xz"
+  'nano-9.2-ucrt64.patch'
+)
+sha256sums=(
+  '05ecb99247b782e8a5b3a25ed4101dd034b0236902f7449bc9795b717642f7e9'
+  '98aabd87f04c2fd4d52b4f87a1b78a97afbb91be3fc071ddd91516ea9dd9d141'
+)
+
+prepare() {
+  cd "${srcdir}/${_realname}-${pkgver}"
+  patch -Np1 -i "${srcdir}/nano-9.2-ucrt64.patch"
+  autoreconf -vfi
+}
+
+build() {
+  cd "${srcdir}/${_realname}-${pkgver}"
+
+  ./configure \
+    --build="${MINGW_CHOST}" \
+    --host="${MINGW_CHOST}" \
+    --prefix="${MINGW_PREFIX}" \
+    --sysconfdir="${MINGW_PREFIX}/etc" \
+    --enable-color \
+    --enable-nanorc \
+    --enable-utf8 \
+    --enable-nls
+
+  make
+}
+
+package() {
+  cd "${srcdir}/${_realname}-${pkgver}"
+
+  make DESTDIR="${pkgdir}" install
+  install -Dm644 doc/sample.nanorc "${pkgdir}${MINGW_PREFIX}/etc/nanorc"
+}
