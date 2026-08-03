@@ -1,24 +1,24 @@
-name: Build GNU nano for MSYS2 UCRT64
+name: Build and release GNU nano for MSYS2 UCRT64
 
 on:
   workflow_dispatch:
   push:
     paths:
-      - ".github/workflows/build-nano-ucrt64.yml"
+      - ".github/workflows/build-nano-ucrt64-github-release.yml"
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
-  group: nano-ucrt64-${{ github.ref }}
-  cancel-in-progress: true
+  group: nano-ucrt64-release
+  cancel-in-progress: false
 
 env:
   NANO_VERSION: "9.2"
   NANO_SHA256: "05ecb99247b782e8a5b3a25ed4101dd034b0236902f7449bc9795b717642f7e9"
 
 jobs:
-  build:
+  build-and-release:
     runs-on: windows-latest
 
     defaults:
@@ -45,17 +45,47 @@ jobs:
             mingw-w64-ucrt-x86_64-libiconv
             mingw-w64-ucrt-x86_64-file
 
+      - name: Determine next SemVer tag
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          latest="$({
+            gh api --paginate \
+              "repos/${GITHUB_REPOSITORY}/git/matching-refs/tags/" \
+              --jq '.[].ref' 2>/dev/null || true
+          } | sed -nE 's#^refs/tags/([0-9]+\.[0-9]+\.[0-9]+)$#\1#p' \
+            | sort -V \
+            | tail -n 1)"
+
+          if [[ -z "$latest" ]]; then
+            next="0.0.1"
+          else
+            IFS=. read -r major minor patch <<< "$latest"
+            next="${major}.${minor}.$((10#$patch + 1))"
+          fi
+
+          echo "Previous tag: ${latest:-<none>}"
+          echo "Next tag: $next"
+          echo "tag=$next" >> "$GITHUB_OUTPUT"
+
       - name: Download, build, and stage nano
+        env:
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
         run: |
           set -euxo pipefail
 
           root="$PWD"
           srcdir="$root/_source"
           stage="$root/_stage"
-          package="$root/nano-ucrt64-${NANO_VERSION}"
+          package_name="nano-ucrt64-${NANO_VERSION}"
+          package="$root/$package_name"
           archive="nano-${NANO_VERSION}.tar.xz"
+          release_archive="$root/${package_name}-${RELEASE_TAG}.tar.xz"
 
-          rm -rf "$srcdir" "$stage" "$package"
+          rm -rf "$srcdir" "$stage" "$package" "$release_archive"
           mkdir -p "$srcdir"
           cd "$srcdir"
 
@@ -80,46 +110,64 @@ jobs:
             --enable-nls
 
           make -j"$(nproc)"
-
-          # 最低限の非対話テスト
           ./src/nano.exe --version
 
-          # DESTDIRへステージングする。
-          # $MINGW_PREFIX はUCRT64では /ucrt64。
           make DESTDIR="$stage" install
 
-          # Artifactのルートを、MSYS2の /ucrt64 に重ねられる構造にする。
           mkdir -p "$package"
           cp -a "$stage$MINGW_PREFIX/." "$package/"
-
-          # サンプル設定は既存設定を上書きしない名前で格納する。
-          install -Dm644 \
-            doc/sample.nanorc \
-            "$package/etc/nanorc.sample"
+          install -Dm644 doc/sample.nanorc "$package/etc/nanorc.sample"
 
           {
             echo "GNU nano: $NANO_VERSION"
+            echo "Release tag: $RELEASE_TAG"
             echo "Target: $MINGW_CHOST"
             echo "Environment: MSYS2 UCRT64"
             echo "Source SHA-256: $NANO_SHA256"
+            echo "Source commit: $GITHUB_SHA"
             echo "Built at: $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
             gcc --version | head -n 1
           } > "$package/BUILD-INFO.txt"
 
-          # ステージング後の実行ファイルを検査する。
           "$package/bin/nano.exe" --version
           file "$package/bin/nano.exe"
-
-          # 必要なDLL名をログへ出力する。
           objdump -p "$package/bin/nano.exe" \
             | sed -n 's/^[[:space:]]*DLL Name: //p' \
             | sort -u
 
-      - name: Upload UCRT64 artifact
+          cd "$root"
+          tar -cJf "$release_archive" "$package_name"
+          sha256sum "$release_archive" > "${release_archive}.sha256"
+
+      - name: Upload workflow artifact
         uses: actions/upload-artifact@v7
         with:
-          name: nano-ucrt64-${{ env.NANO_VERSION }}
-
-          path: nano-ucrt64-${{ env.NANO_VERSION }}
+          name: nano-ucrt64-${{ env.NANO_VERSION }}-${{ steps.version.outputs.tag }}
+          path: |
+            nano-ucrt64-${{ env.NANO_VERSION }}-${{ steps.version.outputs.tag }}.tar.xz
+            nano-ucrt64-${{ env.NANO_VERSION }}-${{ steps.version.outputs.tag }}.tar.xz.sha256
           if-no-files-found: error
-          compression-level: 9
+          compression-level: 0
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euxo pipefail
+
+          asset="nano-ucrt64-${NANO_VERSION}-${RELEASE_TAG}.tar.xz"
+
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}" \
+              >/dev/null 2>&1; then
+            echo "Tag already exists: ${RELEASE_TAG}" >&2
+            exit 1
+          fi
+
+          gh release create "$RELEASE_TAG" \
+            "$asset" \
+            "${asset}.sha256" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "$RELEASE_TAG" \
+            --notes "GNU nano ${NANO_VERSION} built for MSYS2 UCRT64."
