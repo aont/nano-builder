@@ -1,38 +1,50 @@
 --- a/src/browser.c
 +++ b/src/browser.c
-@@ -47,6 +47,7 @@ void read_the_list(const char *path, DIR *dir)
+@@ -47,6 +47,9 @@ void read_the_list(const char *path, DIR *dir)
  {
  	size_t path_len = strlen(path);
  	const struct dirent *entry;
++#if defined _WIN32 && !defined __CYGWIN__ && !defined __MSYS__
 +	DIR *second_pass;
++#endif
  	size_t widest = 0;
  	size_t index = 0;
  
-@@ -72,7 +73,7 @@ void read_the_list(const char *path, DIR *dir)
+@@ -72,7 +75,11 @@ void read_the_list(const char *path, DIR *dir)
  	if (gauge > COLS)
  		gauge = COLS;
  
 -	rewinddir(dir);
++#if defined _WIN32 && !defined __CYGWIN__ && !defined __MSYS__
 +	second_pass = opendir(path);
++#else
++	rewinddir(dir);
++#endif
  
  	free_chararray(filelist, list_length);
  
-@@ -83,7 +84,8 @@ void read_the_list(const char *path, DIR *dir)
+@@ -83,7 +90,12 @@ void read_the_list(const char *path, DIR *dir)
  
  	filelist = nmalloc(list_length * sizeof(char *));
  
 -	while ((entry = readdir(dir)) != NULL && index < list_length) {
++#if defined _WIN32 && !defined __CYGWIN__ && !defined __MSYS__
 +	while (second_pass != NULL &&
 +			(entry = readdir(second_pass)) != NULL && index < list_length) {
++#else
++	while ((entry = readdir(dir)) != NULL && index < list_length) {
++#endif
  		/* Don't show the useless dot item. */
  		if (strcmp(entry->d_name, ".") == 0)
  			continue;
-@@ -95,6 +97,9 @@ void read_the_list(const char *path, DIR *dir)
+@@ -95,6 +107,11 @@ void read_the_list(const char *path, DIR *dir)
  		index++;
  	}
  
++#if defined _WIN32 && !defined __CYGWIN__ && !defined __MSYS__
 +	if (second_pass != NULL)
 +		closedir(second_pass);
++#endif
 +
  	/* Maybe the number of files in the directory decreased between
  	 * the first time we scanned and the second time. */
@@ -42,7 +54,7 @@
 @@ -1657,5 +1657,12 @@ bool make_backup_of(char *realname, struct stat fileinfo)
  	/* Set the backup's timestamps to those of the original file.
  	 * Failure is unimportant: saving the file apparently worked. */
-+#if defined _WIN32 && !defined __CYGWIN__
++#if defined _WIN32 && !defined __CYGWIN__ && !defined __MSYS__
 +	filetimes[0].tv_sec = fileinfo.st_atime;
 +	filetimes[0].tv_nsec = 0;
 +	filetimes[1].tv_sec = fileinfo.st_mtime;
