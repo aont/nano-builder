@@ -125,10 +125,10 @@ jobs:
 
           package="${packages[0]}"
 
-          # Read the package release identity from PKGBUILD. pkgrel is the
-          # pacman-native rebuild counter and replaces the unrelated 0.0.N tag.
+          # Read the package release identity from PKGBUILD. The nano version
+          # and pacman rebuild counter form the SemVer release tag.
           source ./PKGBUILD
-          release_tag="nano-${pkgver}-${pkgrel}"
+          release_tag="v${pkgver}.${pkgrel}"
 
           sha256sum "${package}" > "${package}.sha256"
           makepkg --printsrcinfo > .SRCINFO
@@ -182,7 +182,7 @@ jobs:
           include-hidden-files: true
 
       # A manually dispatched run builds, validates, and publishes an immutable
-      # pkgver-pkgrel release after PKGBUILD has been reviewed.
+      # SemVer release after PKGBUILD has been reviewed.
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -205,7 +205,7 @@ jobs:
             "${PACKAGE_DIR}/.SRCINFO" \
             --repo "${GITHUB_REPOSITORY}" \
             --target "${GITHUB_SHA}" \
-            --title "GNU nano ${RELEASE_TAG#nano-} for MSYS2 UCRT64" \
+            --title "GNU nano ${RELEASE_TAG#v} for MSYS2 UCRT64" \
             --notes-file - <<EOF
           GNU nano package for MSYS2 UCRT64.
 
