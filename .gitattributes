@@ -1,0 +1,3 @@
+# MSYS2 package sources must remain LF on Windows checkouts.
+mingw-w64-nano/PKGBUILD text eol=lf
+mingw-w64-nano/*.patch text eol=lf

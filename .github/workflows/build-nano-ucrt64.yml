@@ -4,6 +4,7 @@ on:
   workflow_dispatch:
   push:
     paths:
+      - ".gitattributes"
       - ".github/workflows/build-nano-ucrt64.yml"
       - "mingw-w64-nano/**"
 
@@ -54,6 +55,15 @@ jobs:
               echo "::error file=${path}::Required package source is missing"
               echo "Repository files:"
               find . -maxdepth 3 -type f -print | sort
+              exit 1
+            fi
+          done
+
+          for path in "${required_files[@]}"; do
+            if LC_ALL=C grep -q $'\r' "${path}"; then
+              echo "::error file=${path}::CRLF line endings detected; package sources must use LF"
+              git check-attr text eol -- "${path}" || true
+              git config --show-origin --get core.autocrlf || true
               exit 1
             fi
           done
