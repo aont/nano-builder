@@ -199,14 +199,31 @@ jobs:
 
           if gh release view "${RELEASE_TAG}" \
               --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-            echo "Release ${RELEASE_TAG} already exists; bump pkgrel in PKGBUILD." >&2
+            echo "::error::Release ${RELEASE_TAG} already exists; bump pkgrel in PKGBUILD."
             exit 1
           fi
 
           gh release create "${RELEASE_TAG}" \
             "${PACKAGE}" \
             "${CHECKSUM}" \
+            "${PACKAGE_DIR}/PKGBUILD" \
+            "${PACKAGE_DIR}/.SRCINFO" \
             --repo "${GITHUB_REPOSITORY}" \
             --target "${GITHUB_SHA}" \
-            --title "GNU ${RELEASE_TAG} for MSYS2 UCRT64" \
-            --notes "Pacman package: mingw-w64-ucrt-x86_64-nano"
+            --title "GNU nano ${RELEASE_TAG#nano-} for MSYS2 UCRT64" \
+            --notes-file - <<EOF
+          GNU nano package for MSYS2 UCRT64.
+
+          Assets:
+
+          - $(basename "${PACKAGE}")
+          - $(basename "${CHECKSUM}")
+          - PKGBUILD
+          - .SRCINFO
+
+          Install with:
+
+          \`\`\`sh
+          pacman -U "$(basename "${PACKAGE}")"
+          \`\`\`
+          EOF
