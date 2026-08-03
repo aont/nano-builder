@@ -3,7 +3,7 @@ _realname=nano
 pkgbase=mingw-w64-${_realname}
 pkgname="${MINGW_PACKAGE_PREFIX}-${_realname}"
 pkgver=9.2
-pkgrel=1
+pkgrel=2
 pkgdesc="Pico editor clone with enhancements (mingw-w64)"
 arch=('any')
 mingw_arch=('ucrt64')
@@ -27,7 +27,7 @@ source=(
 )
 sha256sums=(
   '05ecb99247b782e8a5b3a25ed4101dd034b0236902f7449bc9795b717642f7e9'
-  '98aabd87f04c2fd4d52b4f87a1b78a97afbb91be3fc071ddd91516ea9dd9d141'
+  '271199cfd35c7b2ce2d7f2b261e4bb1012b5e1a20fe0f53c67bb981147134651'
 )
 
 prepare() {
