@@ -1,28 +1,24 @@
-name: Build and release GNU nano for MSYS2 UCRT64
+name: Build GNU nano pacman package for MSYS2 UCRT64
 
 on:
   workflow_dispatch:
   push:
     paths:
       - ".github/workflows/build-nano-ucrt64.yml"
-      - "patches/nano-9.2-ucrt64.patch"
+      - "mingw-w64-nano/**"
 
-# Required to create GitHub Releases and tags.
 permissions:
   contents: write
 
-# Serialize release processing across all branches so that
-# two runs do not assign the same next version.
 concurrency:
-  group: nano-ucrt64-release
+  group: nano-ucrt64-package
   cancel-in-progress: false
 
 env:
-  NANO_VERSION: "9.2"
-  NANO_SHA256: "05ecb99247b782e8a5b3a25ed4101dd034b0236902f7449bc9795b717642f7e9"
+  PACKAGE_DIR: mingw-w64-nano
 
 jobs:
-  build-and-release:
+  build:
     runs-on: windows-latest
 
     defaults:
@@ -40,161 +36,117 @@ jobs:
           update: true
           cache: true
           install: >-
-            curl
-            make
-            patch
-            tar
-            xz
-            mingw-w64-ucrt-x86_64-gcc
-            mingw-w64-ucrt-x86_64-pkgconf
-            mingw-w64-ucrt-x86_64-ncurses
-            mingw-w64-ucrt-x86_64-gettext-runtime
-            mingw-w64-ucrt-x86_64-gettext-tools
-            mingw-w64-ucrt-x86_64-libiconv
-            mingw-w64-ucrt-x86_64-file
+            base-devel
+            git
             mingw-w64-ucrt-x86_64-github-cli
 
-      - name: Verify release tooling
+      - name: Verify package sources
         run: |
           set -euo pipefail
-          command -v gh
-          gh --version
+          test -f "${PACKAGE_DIR}/PKGBUILD"
+          test -f "${PACKAGE_DIR}/nano-9.2-ucrt64.patch"
+          command -v makepkg-mingw
 
-      - name: Determine next SemVer tag
-        id: version
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-
-          # Consider only tags that exactly match refs/tags/X.Y.Z.
-          # Ignore prereleases, build metadata, and tags with a "v" prefix.
-          latest="$({
-            gh api --paginate \
-              "repos/${GITHUB_REPOSITORY}/git/matching-refs/tags/" \
-              --jq '.[].ref'
-          } | sed -nE 's#^refs/tags/([0-9]+\.[0-9]+\.[0-9]+)$#\1#p' \
-            | sort -V \
-            | tail -n 1)"
-
-          if [[ -z "$latest" ]]; then
-            next="0.0.1"
-          else
-            IFS=. read -r major minor patch <<< "$latest"
-            next="${major}.${minor}.$((10#$patch + 1))"
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]] && \
+              grep -Eq "^[[:space:]]*'SKIP'[[:space:]]*(#.*)?$" \
+                "${PACKAGE_DIR}/PKGBUILD"; then
+            echo "Replace the patch SKIP checksum before publishing a release." >&2
+            exit 1
           fi
 
-          echo "Previous tag: ${latest:-<none>}"
-          echo "Next tag: $next"
-          echo "tag=$next" >> "$GITHUB_OUTPUT"
-
-      - name: Download, build, and stage nano
-        env:
-          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+      - name: Build pacman package
+        id: package
         run: |
-          set -euxo pipefail
+          set -euo pipefail
+          cd "${PACKAGE_DIR}"
 
-          root="$PWD"
-          srcdir="$root/_source"
-          stage="$root/_stage"
-          package_name="nano-ucrt64-${NANO_VERSION}"
-          package="$root/$package_name"
-          archive="nano-${NANO_VERSION}.tar.xz"
-          release_archive="$root/${package_name}-${RELEASE_TAG}.tar.xz"
+          # Restrict the build to the target declared by this package.
+          MINGW_ARCH=ucrt64 makepkg-mingw \
+            --cleanbuild \
+            --syncdeps \
+            --noconfirm \
+            --force
 
-          rm -rf "$srcdir" "$stage" "$package" "$release_archive"
-          mkdir -p "$srcdir"
-          cd "$srcdir"
+          package="$(find . -maxdepth 1 -type f \
+            -name 'mingw-w64-ucrt-x86_64-nano-*.pkg.tar.zst' \
+            -print -quit)"
+          test -n "${package}"
 
-          curl --fail --location --retry 5 --retry-all-errors \
-            --output "$archive" \
-            "https://www.nano-editor.org/dist/v9/${archive}"
+          # Read the package release identity from PKGBUILD.  pkgrel is the
+          # pacman-native rebuild counter and replaces the unrelated 0.0.N tag.
+          source ./PKGBUILD
+          release_tag="nano-${pkgver}-${pkgrel}"
 
-          printf '%s  %s\n' "$NANO_SHA256" "$archive" \
-            | sha256sum --check --strict -
+          sha256sum "${package}" > "${package}.sha256"
+          makepkg --printsrcinfo > .SRCINFO
 
-          tar -xf "$archive"
-          cd "nano-${NANO_VERSION}"
+          package="${PACKAGE_DIR}/${package#./}"
+          echo "package=${package}" >> "${GITHUB_OUTPUT}"
+          echo "checksum=${package}.sha256" >> "${GITHUB_OUTPUT}"
+          echo "release_tag=${release_tag}" >> "${GITHUB_OUTPUT}"
 
-          patch -p1 < "$root/patches/nano-9.2-ucrt64.patch"
+      - name: Inspect and install package
+        env:
+          PACKAGE: ${{ steps.package.outputs.package }}
+        run: |
+          set -euo pipefail
 
-          ./configure \
-            --build="$MINGW_CHOST" \
-            --host="$MINGW_CHOST" \
-            --prefix="$MINGW_PREFIX" \
-            --sysconfdir="$MINGW_PREFIX/etc" \
-            --enable-color \
-            --enable-nanorc \
-            --enable-utf8 \
-            --enable-nls
+          pacman -Qip "${PACKAGE}"
+          pacman -Qlp "${PACKAGE}"
 
-          make -j"$(nproc)"
-          ./src/nano.exe --version
+          bsdtar -tf "${PACKAGE}" | grep -Fx 'ucrt64/bin/nano.exe'
+          bsdtar -tf "${PACKAGE}" | grep -Fx 'ucrt64/etc/nanorc'
 
-          make DESTDIR="$stage" install
+          pacman -U --noconfirm "${PACKAGE}"
 
-          mkdir -p "$package"
-          cp -a "$stage$MINGW_PREFIX/." "$package/"
-          install -Dm644 doc/sample.nanorc "$package/etc/nanorc.sample"
-
-          {
-            echo "GNU nano: $NANO_VERSION"
-            echo "Release tag: $RELEASE_TAG"
-            echo "Target: $MINGW_CHOST"
-            echo "Environment: MSYS2 UCRT64"
-            echo "Source SHA-256: $NANO_SHA256"
-            echo "Source commit: $GITHUB_SHA"
-            echo "Built at: $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-            gcc --version | head -n 1
-          } > "$package/BUILD-INFO.txt"
-
-          "$package/bin/nano.exe" --version
-          file "$package/bin/nano.exe"
-          objdump -p "$package/bin/nano.exe" \
+          /ucrt64/bin/nano.exe --version
+          file /ucrt64/bin/nano.exe
+          dlls="$(objdump -p /ucrt64/bin/nano.exe \
             | sed -n 's/^[[:space:]]*DLL Name: //p' \
-            | sort -u
+            | sort -u)"
+          printf '%s\n' "${dlls}"
 
-          cd "$root"
-          tar -cJf "$release_archive" "$package_name"
-          sha256sum "$release_archive" > "${release_archive}.sha256"
+          if grep -Fqi 'msys-2.0.dll' <<< "${dlls}"; then
+            echo "nano.exe is linked to the MSYS runtime, not a native UCRT build." >&2
+            exit 1
+          fi
+
+          pacman -Qi mingw-w64-ucrt-x86_64-nano
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v7
         with:
-          name: nano-ucrt64-${{ env.NANO_VERSION }}-${{ steps.version.outputs.tag }}
+          name: mingw-w64-ucrt-x86_64-${{ steps.package.outputs.release_tag }}
           path: |
-            nano-ucrt64-${{ env.NANO_VERSION }}-${{ steps.version.outputs.tag }}.tar.xz
-            nano-ucrt64-${{ env.NANO_VERSION }}-${{ steps.version.outputs.tag }}.tar.xz.sha256
+            ${{ steps.package.outputs.package }}
+            ${{ steps.package.outputs.checksum }}
+            mingw-w64-nano/PKGBUILD
+            mingw-w64-nano/.SRCINFO
           if-no-files-found: error
           compression-level: 0
 
+      # Push builds are validation builds.  A manually dispatched run publishes
+      # the immutable pkgver-pkgrel release after PKGBUILD has been reviewed.
       - name: Create GitHub Release
+        if: github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+          PACKAGE: ${{ steps.package.outputs.package }}
+          CHECKSUM: ${{ steps.package.outputs.checksum }}
+          RELEASE_TAG: ${{ steps.package.outputs.release_tag }}
         run: |
-          set -euxo pipefail
+          set -euo pipefail
 
-          asset="nano-ucrt64-${NANO_VERSION}-${RELEASE_TAG}.tar.xz"
-          test -f "$asset"
-          test -f "${asset}.sha256"
-
-          # Although concurrency normally prevents conflicts, fail rather than
-          # overwrite anything if a tag with the same name was created externally.
-          existing_tag="$(
-            gh api \
-              "repos/${GITHUB_REPOSITORY}/git/matching-refs/tags/${RELEASE_TAG}" \
-              --jq ".[] | select(.ref == \"refs/tags/${RELEASE_TAG}\") | .ref"
-          )"
-          if [[ -n "$existing_tag" ]]; then
-            echo "Tag already exists: ${RELEASE_TAG}" >&2
+          if gh release view "${RELEASE_TAG}" \
+              --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "Release ${RELEASE_TAG} already exists; bump pkgrel in PKGBUILD." >&2
             exit 1
           fi
 
-          gh release create "$RELEASE_TAG" \
-            "$asset" \
-            "${asset}.sha256" \
-            --repo "$GITHUB_REPOSITORY" \
-            --target "$GITHUB_SHA" \
-            --title "$RELEASE_TAG" \
-            --notes "GNU nano ${NANO_VERSION} built for MSYS2 UCRT64."
+          gh release create "${RELEASE_TAG}" \
+            "${PACKAGE}" \
+            "${CHECKSUM}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --target "${GITHUB_SHA}" \
+            --title "GNU ${RELEASE_TAG} for MSYS2 UCRT64" \
+            --notes "Pacman package: mingw-w64-ucrt-x86_64-nano"
