@@ -4,11 +4,14 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - ".github/workflows/build-nano-ucrt64-github-release.yml"
+      - ".github/workflows/build-nano-ucrt64.yml"
 
+# GitHub Releaseとタグの作成に必要。
 permissions:
   contents: write
 
+# 2つの実行が同じ次バージョンを採番しないよう、
+# ブランチに関係なくリリース処理を直列化する。
 concurrency:
   group: nano-ucrt64-release
   cancel-in-progress: false
@@ -35,6 +38,7 @@ jobs:
           install: >-
             curl
             make
+            patch
             tar
             xz
             mingw-w64-ucrt-x86_64-gcc
@@ -52,6 +56,8 @@ jobs:
         run: |
           set -euo pipefail
 
+          # refs/tags/X.Y.Z に完全一致するタグだけを対象にする。
+          # prerelease、build metadata、v接頭辞付きタグは無視する。
           latest="$({
             gh api --paginate \
               "repos/${GITHUB_REPOSITORY}/git/matching-refs/tags/" \
@@ -98,6 +104,52 @@ jobs:
 
           tar -xf "$archive"
           cd "nano-${NANO_VERSION}"
+
+          # nano 9.2 bundles a Gnulib dirent replacement on native Windows.
+          # In that configuration DIR becomes struct gl_directory, but
+          # rewinddir() remains the MinGW function accepting the native DIR.
+          # Preserve the file browser by using a separate stream for pass 2.
+          patch -p1 <<'PATCH'
+          --- a/src/browser.c
+          +++ b/src/browser.c
+          @@ -47,6 +47,7 @@ void read_the_list(const char *path, DIR *dir)
+           {
+           	size_t path_len = strlen(path);
+           	const struct dirent *entry;
+          +	DIR *second_pass;
+           	size_t widest = 0;
+           	size_t index = 0;
+           
+          @@ -72,7 +73,7 @@ void read_the_list(const char *path, DIR *dir)
+           	if (gauge > COLS)
+           		gauge = COLS;
+           
+          -	rewinddir(dir);
+          +	second_pass = opendir(path);
+           
+           	free_chararray(filelist, list_length);
+           
+          @@ -83,7 +84,8 @@ void read_the_list(const char *path, DIR *dir)
+           
+           	filelist = nmalloc(list_length * sizeof(char *));
+           
+          -	while ((entry = readdir(dir)) != NULL && index < list_length) {
+          +	while (second_pass != NULL &&
+          +			(entry = readdir(second_pass)) != NULL && index < list_length) {
+           		/* Don't show the useless dot item. */
+           		if (strcmp(entry->d_name, ".") == 0)
+           			continue;
+          @@ -95,6 +97,9 @@ void read_the_list(const char *path, DIR *dir)
+           		index++;
+           	}
+           
+          +	if (second_pass != NULL)
+          +		closedir(second_pass);
+          +
+           	/* Maybe the number of files in the directory decreased between
+           	 * the first time we scanned and the second time. */
+           	list_length = index;
+          PATCH
 
           ./configure \
             --build="$MINGW_CHOST" \
@@ -158,6 +210,8 @@ jobs:
 
           asset="nano-ucrt64-${NANO_VERSION}-${RELEASE_TAG}.tar.xz"
 
+          # concurrencyで通常は衝突しないが、外部から同名タグが作成された場合は
+          # 誤って上書きせず失敗させる。
           if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}" \
               >/dev/null 2>&1; then
             echo "Tag already exists: ${RELEASE_TAG}" >&2
