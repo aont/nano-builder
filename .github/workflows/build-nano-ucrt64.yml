@@ -52,6 +52,13 @@ jobs:
             mingw-w64-ucrt-x86_64-gettext-tools
             mingw-w64-ucrt-x86_64-libiconv
             mingw-w64-ucrt-x86_64-file
+            mingw-w64-ucrt-x86_64-github-cli
+
+      - name: Verify release tooling
+        run: |
+          set -euo pipefail
+          command -v gh
+          gh --version
 
       - name: Determine next SemVer tag
         id: version
@@ -65,7 +72,7 @@ jobs:
           latest="$({
             gh api --paginate \
               "repos/${GITHUB_REPOSITORY}/git/matching-refs/tags/" \
-              --jq '.[].ref' 2>/dev/null || true
+              --jq '.[].ref'
           } | sed -nE 's#^refs/tags/([0-9]+\.[0-9]+\.[0-9]+)$#\1#p' \
             | sort -V \
             | tail -n 1)"
@@ -169,11 +176,17 @@ jobs:
           set -euxo pipefail
 
           asset="nano-ucrt64-${NANO_VERSION}-${RELEASE_TAG}.tar.xz"
+          test -f "$asset"
+          test -f "${asset}.sha256"
 
           # Although concurrency normally prevents conflicts, fail rather than
           # overwrite anything if a tag with the same name was created externally.
-          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}" \
-              >/dev/null 2>&1; then
+          existing_tag="$(
+            gh api \
+              "repos/${GITHUB_REPOSITORY}/git/matching-refs/tags/${RELEASE_TAG}" \
+              --jq ".[] | select(.ref == \"refs/tags/${RELEASE_TAG}\") | .ref"
+          )"
+          if [[ -n "$existing_tag" ]]; then
             echo "Tag already exists: ${RELEASE_TAG}" >&2
             exit 1
           fi
