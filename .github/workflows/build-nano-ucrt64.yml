@@ -2,11 +2,6 @@ name: Build GNU nano pacman package for MSYS2 UCRT64
 
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - ".gitattributes"
-      - ".github/workflows/build-nano-ucrt64.yml"
-      - "mingw-w64-nano/**"
 
 permissions:
   contents: write
@@ -29,6 +24,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Set up MSYS2 UCRT64
         uses: msys2/setup-msys2@v2
@@ -77,28 +74,26 @@ jobs:
 
           makepkg-mingw --version || true
 
-          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
-            source "${PACKAGE_DIR}/PKGBUILD"
-            patch_index=-1
+          source "${PACKAGE_DIR}/PKGBUILD"
+          patch_index=-1
 
-            for i in "${!source[@]}"; do
-              source_name="${source[$i]##*::}"
-              source_name="${source_name##*/}"
-              if [[ "${source_name}" == "nano-9.2-ucrt64.patch" ]]; then
-                patch_index="${i}"
-                break
-              fi
-            done
-
-            if (( patch_index < 0 )); then
-              echo "::error::Patch is not declared in PKGBUILD source[]"
-              exit 1
+          for i in "${!source[@]}"; do
+            source_name="${source[$i]##*::}"
+            source_name="${source_name##*/}"
+            if [[ "${source_name}" == "nano-9.2-ucrt64.patch" ]]; then
+              patch_index="${i}"
+              break
             fi
+          done
 
-            if [[ "${sha256sums[$patch_index]:-}" == "SKIP" ]]; then
-              echo "::error::Patch checksum must not be SKIP for a release"
-              exit 1
-            fi
+          if (( patch_index < 0 )); then
+            echo "::error::Patch is not declared in PKGBUILD source[]"
+            exit 1
+          fi
+
+          if [[ "${sha256sums[$patch_index]:-}" == "SKIP" ]]; then
+            echo "::error::Patch checksum must not be SKIP for a release"
+            exit 1
           fi
 
       - name: Build pacman package
@@ -184,11 +179,11 @@ jobs:
             mingw-w64-nano/.SRCINFO
           if-no-files-found: error
           compression-level: 0
+          include-hidden-files: true
 
-      # Push builds are validation builds. A manually dispatched run publishes
-      # the immutable pkgver-pkgrel release after PKGBUILD has been reviewed.
+      # A manually dispatched run builds, validates, and publishes an immutable
+      # pkgver-pkgrel release after PKGBUILD has been reviewed.
       - name: Create GitHub Release
-        if: github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ github.token }}
           PACKAGE: ${{ steps.package.outputs.package }}
